@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<title>ÆX CPT . Continuous Performance Task</title>
+
+<style>
+  body {
+    background: #0d0d0d;
+    color: #ffffff;
+    font-family: Arial, sans-serif;
+    text-align: center;
+    padding-top: 80px;
+    margin: 0;
+  }
+
+  h1 {
+    font-size: 52px;
+    margin-bottom: 20px;
+  }
+
+  h2 {
+    font-size: 26px;
+    margin-top: 0;
+    margin-bottom: 25px;
+  }
+
+  #instructions {
+    font-size: 20px;
+    margin-bottom: 30px;
+    max-width: 900px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  #letter {
+    font-size: 100px;
+    font-weight: bold;
+    margin-bottom: 40px;
+    min-height: 120px;
+  }
+
+  .btn {
+    font-size: 22px;
+    padding: 12px 26px;
+    margin: 8px;
+    background: #1b1b1b;
+    border: 2px solid #5fffd2;
+    color: #5fffd2;
+    cursor: pointer;
+    border-radius: 10px;
+  }
+
+  .btn:hover {
+    background: #5fffd2;
+    color: #000000;
+  }
+
+  #startBtn {
+    margin-top: 10px;
+    margin-bottom: 30px;
+  }
+
+  #mobileTapBtn {
+    display: none;
+    margin-top: 10px;
+  }
+
+  #result {
+    font-size: 20px;
+    margin-top: 40px;
+    line-height: 1.6;
+    max-width: 900px;
+    margin-left: auto;
+    margin-right: auto;
+    text-align: left;
+  }
+
+  #result p {
+    margin: 6px 0;
+  }
+
+  #legend-results ul {
+    text-align: left;
+    display: inline-block;
+    margin: 0;
+    padding-left: 20px;
+  }
+
+  #legend-results li {
+    margin-bottom: 6px;
+  }
+
+  .badge-container {
+    margin-top: 25px;
+    margin-bottom: 10px;
+  }
+
+  .badge-label {
+    font-size: 18px;
+    margin-bottom: 8px;
+  }
+
+  .badge-pill {
+    display: inline-block;
+    padding: 8px 18px;
+    border-radius: 999px;
+    font-size: 16px;
+    font-weight: bold;
+  }
+
+  .badge-good {
+    background-color: #1f8a70;
+    color: #ffffff;
+  }
+
+  .badge-normal {
+    background-color: #b38f1b;
+    color: #000000;
+  }
+
+  .badge-high {
+    background-color: #b3261e;
+    color: #ffffff;
+  }
+
+  .note {
+    font-size: 12px;
+    margin-top: 35px;
+    color: #cccccc;
+    text-align: center;
+  }
+</style>
+</head>
+
+<body>
+
+<h1>Continuous Performance Task</h1>
+<h2>Compito di attenzione sostenuta</h2>
+
+<div id="instructions"></div>
+
+<button id="startBtn" class="btn">Inizia</button>
+<button id="mobileTapBtn" class="btn">Tocca quando vedi X</button>
+
+<div id="letter" style="display:none;"></div>
+
+<div id="result"></div>
+
+<script>
+/* ------------------------------
+   CONFIGURAZIONE
+--------------------------------*/
+
+const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbyB4Upm43cEqlc9MDchxM7V_AvQg_RXHl3h_UFuF754z54ZPNG8h9o3fqQs-YTyUWo-/exec";
+
+const NUM_TRIALS = 200;
+const TARGET_PROB = 0.3;
+const STIM_MS = 300;
+const ISI_MS = 700;
+
+const NON_TARGETS = "ABCDEFGHJKLMNPQRTUVWYZ".split("");
+
+const IS_MOBILE = /Mobi|Android/i.test(navigator.userAgent);
+const DEVICE_TYPE = IS_MOBILE ? "mobile" : "desktop";
+
+let trials = [];
+let currentTrial = 0;
+let trialStartTime = 0;
+let respondedThisTrial = false;
+let running = false;
+let sessionId = null;
+
+/* ------------------------------
+   UTILITY
+--------------------------------*/
+
+function avg(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+function stdDev(arr) {
+  if (arr.length < 2) return 0;
+  const m = avg(arr);
+  const variance = arr.reduce((sum, v) => sum + Math.pow(v - m, 2), 0) / (arr.length - 1);
+  return Math.sqrt(variance);
+}
+
+function clamp(x, minVal, maxVal) {
+  return Math.max(minVal, Math.min(maxVal, x));
+}
+
+function interpretPerformanceBand(accuracyPercent, omissions, commissions, processingSpeedMs) {
+  if (accuracyPercent >= 90 && commissions <= 2 && omissions <= 2) {
+    return "Ottimo";
+  } else if (accuracyPercent >= 75) {
+    return "Buono";
+  } else {
+    return "Critico";
+  }
+}
+
+function bandToLabelAndClass(band) {
+  if (band === "Ottimo") {
+    return {
+      label: "Ottima attenzione sostenuta e buon controllo inibitorio",
+      cssClass: "badge-good"
+    };
+  } else if (band === "Buono") {
+    return {
+      label: "Performance nella norma. possibili fluttuazioni di attenzione",
+      cssClass: "badge-normal"
+    };
+  } else {
+    return {
+      label: "Calo di attenzione o risposte impulsive più frequenti in questo test",
+      cssClass: "badge-high"
+    };
+  }
+}
+
+/* ------------------------------
+   ELEMENTI DOM
+--------------------------------*/
+
+const instructionsDiv = document.getElementById("instructions");
+const startBtn = document.getElementById("startBtn");
+const mobileTapBtn = document.getElementById("mobileTapBtn");
+const letterDiv = document.getElementById("letter");
+const resultDiv = document.getElementById("result");
+
+/* Istruzioni adattate a device */
+
+if (IS_MOBILE) {
+  instructionsDiv.innerHTML = `
+    Premi "Inizia" per cominciare.<br>
+    Quando vedi la lettera <strong>X</strong>, tocca il pulsante verde in basso.<br>
+    Ignora tutte le altre lettere.
+  `;
+} else {
+  instructionsDiv.innerHTML = `
+    Premi "Inizia" per cominciare.<br>
+    Premi la <strong>barra spaziatrice</strong> solo quando compare la lettera <strong>X</strong>.<br>
+    Ignora tutte le altre lettere.
+  `;
+}
+
+/* ------------------------------
+   AVVIO TEST
+--------------------------------*/
+
+startBtn.onclick = () => {
+  sessionId = "AEX-" + Date.now();
+  instructionsDiv.style.display = "none";
+  startBtn.style.display = "none";
+
+  if (IS_MOBILE) {
+    mobileTapBtn.style.display = "inline-block";
+    mobileTapBtn.addEventListener("click", handleTap);
+  }
+
+  letterDiv.style.display = "block";
+
+  window.addEventListener("keydown", handleKeydown);
+  running = true;
+  nextTrial();
+};
+
+/* ------------------------------
+   GESTIONE RISPOSTE
+--------------------------------*/
+
+function handleKeydown(e) {
+  if (!running) return;
+  if (IS_MOBILE) return;
+  if (e.code !== "Space" && e.key !== " ") return;
+  registerResponse();
+}
+
+function handleTap() {
+  if (!running) return;
+  registerResponse();
+}
+
+function registerResponse() {
+  if (respondedThisTrial) return;
+
+  respondedThisTrial = true;
+  const rt = Math.round(performance.now() - trialStartTime);
+
+  const t = trials[currentTrial - 1];
+  t.responded = true;
+  t.rt = rt;
+  t.correct = t.isTarget;
+}
+
+/* ------------------------------
+   NUOVO TRIAL
+--------------------------------*/
+
+function nextTrial() {
+  if (currentTrial >= NUM_TRIALS) {
+    finishTest();
+    return;
+  }
+
+  respondedThisTrial = false;
+
+  const isTarget = Math.random() < TARGET_PROB;
+  let letter = "X";
+  if (!isTarget) {
+    letter = NON_TARGETS[Math.floor(Math.random() * NON_TARGETS.length)];
+  }
+
+  letterDiv.innerHTML = letter;
+  trialStartTime = performance.now();
+
+  trials.push({
+    isTarget: isTarget,
+    responded: false,
+    rt: null,
+    correct: null
+  });
+
+  currentTrial++;
+
+  setTimeout(() => {
+    letterDiv.innerHTML = "";
+
+    setTimeout(() => {
+      nextTrial();
+    }, ISI_MS);
+
+  }, STIM_MS);
+}
+
+/* ------------------------------
+   FINE TEST
+--------------------------------*/
+
+function finishTest() {
+  running = false;
+  window.removeEventListener("keydown", handleKeydown);
+  if (IS_MOBILE) {
+    mobileTapBtn.removeEventListener("click", handleTap);
+    mobileTapBtn.style.display = "none";
+  }
+  letterDiv.style.display = "none";
+
+  let targetCount = 0;
+  let nonTargetCount = 0;
+  let hits = 0;
+  let omissions = 0;
+  let commissions = 0;
+  let rtsHits = [];
+
+  trials.forEach(t => {
+    if (t.isTarget) {
+      targetCount++;
+      if (t.responded && t.correct) {
+        hits++;
+        if (t.rt != null) rtsHits.push(t.rt);
+      } else if (!t.responded) {
+        omissions++;
+      }
+    } else {
+      nonTargetCount++;
+      if (t.responded) {
+        commissions++;
+      }
+    }
+  });
+
+  const accuracyPercent = targetCount > 0 ? Math.round((hits / targetCount) * 100) : 0;
+  const meanRtHits = rtsHits.length ? Math.round(avg(rtsHits)) : 0;
+
+  const processingSpeedMs = meanRtHits;
+  const responseVariabilityMs = rtsHits.length ? Math.round(stdDev(rtsHits)) : 0;
+
+  const commissionRate = nonTargetCount > 0 ? commissions / nonTargetCount : 1;
+  const inhibitoryControlScore = clamp(100 - commissionRate * 200, 0, 100);
+
+  const effPenalty = clamp(processingSpeedMs / 20, 0, 100);
+  const variabilityPenalty = clamp(responseVariabilityMs / 10, 0, 100);
+
+  const cognitiveEfficiencyScore = clamp(
+    0.5 * accuracyPercent +
+    0.3 * (100 - effPenalty) +
+    0.2 * (100 - variabilityPenalty),
+    0,
+    100
+  );
+
+  const performanceBand = interpretPerformanceBand(
+    accuracyPercent,
+    omissions,
+    commissions,
+    processingSpeedMs
+  );
+
+  const omissionRate = targetCount > 0 ? omissions / targetCount : 1;
+  const qualityFlag =
+    NUM_TRIALS >= 100 &&
+    accuracyPercent >= 40 &&
+    accuracyPercent <= 100 &&
+    omissionRate < 0.4;
+
+  const interp = bandToLabelAndClass(performanceBand);
+
+  const metrics = {
+    totalTrials: NUM_TRIALS,
+    targetTrials: targetCount,
+    nonTargetTrials: nonTargetCount,
+    meanRtHits,
+    omissions,
+    commissions,
+    accuracyPercent,
+    processingSpeedMs,
+    responseVariabilityMs,
+    inhibitoryControlScore,
+    cognitiveEfficiencyScore,
+    performanceBand,
+    qualityFlag
+  };
+
+  renderResults(metrics);
+  sendToSheet(metrics);
+}
+
+/* ------------------------------
+   UI RISULTATI
+--------------------------------*/
+
+function renderResults(m) {
+  const interp = bandToLabelAndClass(m.performanceBand);
+
+  resultDiv.innerHTML = `
+    <h2>Risultati</h2>
+
+    <p><strong>Trials totali. </strong>${m.totalTrials}</p>
+    <p><strong>Trials target (X). </strong>${m.targetTrials}</p>
+    <p><strong>Trials non target. </strong>${m.nonTargetTrials}</p>
+
+    <p><strong>Tempo medio di risposta ai target corretti. </strong>${m.meanRtHits || "-"} ms</p>
+    <p><strong>Velocità di elaborazione (processing speed). </strong>${m.processingSpeedMs || "-"} ms</p>
+    <p><strong>Variabilità dei tempi di risposta. </strong>${m.responseVariabilityMs || "-"} ms</p>
+
+    <p><strong>Errori di omissione (target senza risposta). </strong>${m.omissions}</p>
+    <p><strong>Errori di commissione (risposte a non target). </strong>${m.commissions}</p>
+    <p><strong>Accuratezza sui target. </strong>${m.accuracyPercent} percent</p>
+
+    <div class="badge-container">
+      <div class="badge-label">Sintesi del tuo profilo in questo test</div>
+      <div class="badge-pill ${interp.cssClass}">
+        ${interp.label}
+      </div>
+    </div>
+
+    <p style="margin-top:16px;">
+      <strong>Inhibitory Control Score. </strong>${Math.round(m.inhibitoryControlScore)} / 100<br>
+      <strong>Cognitive Efficiency Score. </strong>${Math.round(m.cognitiveEfficiencyScore)} / 100
+    </p>
+
+    <p><strong>Profilo attenzione sostenuta. </strong>${m.performanceBand}</p>
+    <p><strong>Device. </strong>${DEVICE_TYPE}. <strong>Qualità dati. </strong>${m.qualityFlag ? "Valida" : "Da interpretare con cautela"}</p>
+
+    <div id="legend-results">
+      <h3>Come leggere questi dati</h3>
+      <ul>
+        <li>Questo compito richiede di mantenere l'attenzione nel tempo su stimoli ripetitivi.</li>
+        <li>Un tempo di reazione più basso indica risposte più rapide ai target rilevanti.</li>
+        <li>Molte omissioni possono indicare cali di attenzione o affaticamento cognitivo.</li>
+        <li>Molte commissioni possono indicare tendenza alla risposta impulsiva.</li>
+      </ul>
+    </div>
+
+    <p class="note">
+      I dati di questo test sono salvati in forma anonima e aggregata.  
+      non raccogliamo nome. email o altri dati che permettano l'identificazione personale.  
+      il tuo codice di sessione è <strong>${sessionId}</strong> e viene usato solo per analisi statistiche interne.
+    </p>
+  `;
+}
+
+/* ------------------------------
+   INVIO DATI A GOOGLE SHEET
+--------------------------------*/
+
+function sendToSheet(m) {
+  const payload = {
+    timestamp: new Date().toISOString(),
+    session_id: sessionId,
+    device_type: DEVICE_TYPE,
+    total_trials: m.totalTrials,
+    target_trials: m.targetTrials,
+    nontarget_trials: m.nonTargetTrials,
+    mean_rt_hits_ms: m.meanRtHits,
+    omissions: m.omissions,
+    commissions: m.commissions,
+    accuracy_percent: m.accuracyPercent,
+    processing_speed_ms: m.processingSpeedMs,
+    response_variability_ms: m.responseVariabilityMs,
+    inhibitory_control_score: Math.round(m.inhibitoryControlScore),
+    cognitive_efficiency_score: Math.round(m.cognitiveEfficiencyScore),
+    performance_band: m.performanceBand,
+    quality_flag: m.qualityFlag
+  };
+
+  fetch(WEBAPP_URL, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify(payload)
+  }).catch(err => {
+    console.error("Errore nell'invio al foglio Google:", err);
+  });
+}
+</script>
+
+</body>
+</html>
